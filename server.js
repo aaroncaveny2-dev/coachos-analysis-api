@@ -9,6 +9,15 @@ const Stockfish = require('stockfish');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
+  next();
+});
+
+app.get('/test', (req, res) => {
+  console.log('Test route hit');
+  res.json({ message: 'Analysis API is reachable' });
+});
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -152,6 +161,14 @@ app.post('/analyze-game', async (req, res) => {
 // START
 const PORT = process.env.PORT || 3001;
 
+app.post('/analyze-student', async (req, res) => {
+  console.log('Analyze student hit:', req.body);
+
+  res.json({
+    success: true,
+    message: 'analyze-student endpoint reached'
+  });
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
