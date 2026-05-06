@@ -162,13 +162,66 @@ app.post('/analyze-game', async (req, res) => {
 const PORT = process.env.PORT || 3001;
 
 app.post('/analyze-student', async (req, res) => {
-  console.log('Analyze student hit:', req.body);
+  const { student_id } = req.body;
 
-  res.json({
-    success: true,
-    message: 'analyze-student endpoint reached'
-  });
-});
-app.listen(PORT, () => {
+  try {
+    console.log('Analyzing student:', student_id);
+
+    // 1. Get last 20 games
+    const { data: games, error } = await supabase
+      .from('games')
+      .select('*')
+      .eq('student_id', student_id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+
+    if (!games || games.length === 0) {
+      return res.json({ message: 'No games found' });
+    }
+
+    console.log(`Found ${games.length} games`);
+
+    // 2. Create analysis jobs ONLY for these games
+    for (const game of games) {
+      // Check if already analyzed
+      const { data: existing } = await supabase
+        .from('game_analysis_jobs')
+        .select('*')
+        .eq('game_id', game.id)
+        .maybeSingle();
+
+      if (!existing) {
+        await supabase.from('game_analysis_jobs').insert({
+          game_id: game.id,
+          student_id: student_id,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    // 3. Trigger analysis for each game
+    for (const game of games) {
+      console.log('Triggering analysis for game:', game.id);
+
+      await fetch('http://localhost:3001/analyze-game', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_id: game.id }),
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Triggered analysis for ${games.length} games`,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
