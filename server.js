@@ -1,128 +1,172 @@
-require('dotenv').config();
+require("dotenv").config();
 
-const express = require('express');
-const cors = require('cors');
-const { createClient } = require('@supabase/supabase-js');
-const { Chess } = require('chess.js');
-const Stockfish = require('stockfish');
+const express = require("express");
+const cors = require("cors");
+const { Chess } = require("chess.js");
+const Stockfish = require("stockfish");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
   next();
 });
 
-app.get('/test', (req, res) => {
-  console.log('Test route hit');
-  res.json({ message: 'Analysis API is reachable' });
+const LOVABLE_API_BASE = process.env.LOVABLE_API_BASE;
+const LOVABLE_PROXY_TOKEN = process.env.LOVABLE_PROXY_TOKEN;
+
+if (!LOVABLE_API_BASE || !LOVABLE_PROXY_TOKEN) {
+  console.error("Missing LOVABLE_API_BASE or LOVABLE_PROXY_TOKEN");
+}
+
+async function lovableFetch(path, options = {}) {
+  const response = await fetch(`${LOVABLE_API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${LOVABLE_PROXY_TOKEN}`,
+      ...(options.headers || {}),
+    },
+  });
+
+  const text = await response.text();
+
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Lovable proxy error ${response.status}: ${JSON.stringify(data)}`
+    );
+  }
+
+  return data;
+}
+
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
 });
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-// HEALTH
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get("/test", (req, res) => {
+  res.json({
+    message: "Analysis API is reachable",
+    lovableConfigured: Boolean(LOVABLE_API_BASE && LOVABLE_PROXY_TOKEN),
+  });
 });
 
-// RUN STOCKFISH ANALYSIS FOR A POSITION
 function analyzePosition(fen) {
   return new Promise((resolve) => {
     const engine = Stockfish();
-
     let resolved = false;
 
-    engine.onmessage = function (line) {
-      if (typeof line !== 'string') return;
+    const finish = (score) => {
+      if (resolved) return;
+      resolved = true;
+      try {
+        engine.terminate();
+      } catch {}
+      resolve(score);
+    };
 
-      if (line.includes('score cp')) {
+    engine.onmessage = function (line) {
+      if (typeof line !== "string") return;
+
+      if (line.includes("score cp")) {
         const match = line.match(/score cp (-?\d+)/);
-        if (match && !resolved) {
-          resolved = true;
-          engine.terminate();
-          resolve(parseInt(match[1], 10));
-        }
+        if (match) finish(parseInt(match[1], 10));
       }
 
-      if (line.includes('score mate')) {
-        resolved = true;
-        engine.terminate();
-        resolve(10000); // treat mate as huge eval
+      if (line.includes("score mate")) {
+        const match = line.match(/score mate (-?\d+)/);
+        if (match) {
+          const mate = parseInt(match[1], 10);
+          finish(mate > 0 ? 10000 : -10000);
+        }
       }
     };
 
-    engine.postMessage('uci');
+    engine.postMessage("uci");
     engine.postMessage(`position fen ${fen}`);
-    engine.postMessage('go depth 10');
+    engine.postMessage("go depth 8");
+
+    setTimeout(() => finish(0), 8000);
   });
 }
 
-// CLASSIFICATION
 function classify(cpl) {
-  if (cpl < 30) return 'good';
-  if (cpl < 80) return 'inaccuracy';
-  if (cpl < 200) return 'mistake';
-  return 'blunder';
+  if (cpl < 30) return "good";
+  if (cpl < 80) return "inaccuracy";
+  if (cpl < 200) return "mistake";
+  return "blunder";
 }
 
-// PHASE
-function getPhase(moveIndex) {
-  if (moveIndex < 20) return 'opening';
-  if (moveIndex < 60) return 'middlegame';
-  return 'endgame';
+function getPhase(plyIndex) {
+  if (plyIndex < 20) return "opening";
+  if (plyIndex < 60) return "middlegame";
+  return "endgame";
 }
 
-// ANALYZE GAME
-app.post('/analyze-game', async (req, res) => {
+app.post("/analyze-game", async (req, res) => {
   const { game_id } = req.body;
 
   try {
-    await supabase
-      .from('game_analysis_jobs')
-      .update({ status: 'running' })
-      .eq('game_id', game_id);
+    if (!game_id) throw new Error("Missing game_id");
 
-    const { data: game } = await supabase
-      .from('games')
-      .select('*')
-      .eq('id', game_id)
-      .single();
+    console.log("Analyzing game:", game_id);
 
-    if (!game) throw new Error('Game not found');
+    await lovableFetch("/api/public/analysis/jobs", {
+      method: "POST",
+      body: JSON.stringify({
+        game_id,
+        status: "running",
+      }),
+    });
+
+    const gameResponse = await lovableFetch(
+      `/api/public/analysis/games?game_ids=${encodeURIComponent(game_id)}`
+    );
+
+    const game = Array.isArray(gameResponse)
+      ? gameResponse[0]
+      : gameResponse.games?.[0];
+
+    if (!game) throw new Error("Game not found from Lovable proxy");
+    if (!game.pgn) throw new Error("Game has no PGN");
 
     const chess = new Chess();
     chess.loadPgn(game.pgn);
 
     const moves = chess.history({ verbose: true });
-
     chess.reset();
+
+    const moveRows = [];
 
     for (let i = 0; i < moves.length; i++) {
       const move = moves[i];
 
       const fenBefore = chess.fen();
-
       const evalBefore = await analyzePosition(fenBefore);
 
       chess.move(move);
 
       const fenAfter = chess.fen();
-
       const evalAfter = await analyzePosition(fenAfter);
 
       const cpl = Math.abs(evalBefore - evalAfter);
 
-      await supabase.from('game_move_analysis').insert({
-        game_id: game_id,
+      moveRows.push({
+        game_id,
         move_number: Math.ceil((i + 1) / 2),
         ply: i + 1,
-        player_color: move.color === 'w' ? 'white' : 'black',
+        player_color: move.color === "w" ? "white" : "black",
         san: move.san,
-        uci: move.from + move.to,
+        uci: move.from + move.to + (move.promotion || ""),
         fen_before: fenBefore,
         fen_after: fenAfter,
         engine_eval_before: evalBefore,
@@ -133,95 +177,143 @@ app.post('/analyze-game', async (req, res) => {
       });
     }
 
-    await supabase
-      .from('game_analysis_jobs')
-      .update({
-        status: 'completed',
+    await lovableFetch("/api/public/analysis/move-analysis", {
+      method: "POST",
+      body: JSON.stringify({
+        game_id,
+        replace: true,
+        moves: moveRows,
+      }),
+    });
+
+    await lovableFetch("/api/public/analysis/jobs", {
+      method: "POST",
+      body: JSON.stringify({
+        game_id,
+        student_id: game.student_id,
+        status: "completed",
         completed_at: new Date().toISOString(),
-      })
-      .eq('game_id', game_id);
+      }),
+    });
 
-    res.json({ success: true });
-
+    res.json({
+      success: true,
+      game_id,
+      moves_analyzed: moveRows.length,
+    });
   } catch (err) {
-    console.error(err);
+    console.error("Analyze game failed:", err.message);
 
-    await supabase
-      .from('game_analysis_jobs')
-      .update({
-        status: 'failed',
-        error_message: err.message,
-      })
-      .eq('game_id', game_id);
+    try {
+      await lovableFetch("/api/public/analysis/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          game_id,
+          status: "failed",
+          error_message: err.message,
+        }),
+      });
+    } catch (proxyErr) {
+      console.error("Failed to mark job failed:", proxyErr.message);
+    }
 
     res.status(500).json({ error: err.message });
   }
 });
 
-// START
-const PORT = process.env.PORT || 3001;
-
-app.post('/analyze-student', async (req, res) => {
+app.post("/analyze-student", async (req, res) => {
   const { student_id } = req.body;
 
   try {
-    console.log('Analyzing student:', student_id);
+    if (!student_id) throw new Error("Missing student_id");
 
-    // 1. Get last 20 games
-    const { data: games, error } = await supabase
-      .from('games')
-      .select('*')
-      .eq('student_id', student_id)
-      .order('created_at', { ascending: false })
-      .limit(20);
+    console.log("Analyzing student:", student_id);
 
-    if (error) throw error;
+    const gameResponse = await lovableFetch(
+      `/api/public/analysis/games?student_id=${encodeURIComponent(
+        student_id
+      )}&limit=20`
+    );
 
-    if (!games || games.length === 0) {
-      return res.json({ message: 'No games found' });
-    }
+    const games = Array.isArray(gameResponse)
+      ? gameResponse
+      : gameResponse.games || [];
 
     console.log(`Found ${games.length} games`);
 
-    // 2. Create analysis jobs ONLY for these games
-    for (const game of games) {
-      // Check if already analyzed
-      const { data: existing } = await supabase
-        .from('game_analysis_jobs')
-        .select('*')
-        .eq('game_id', game.id)
-        .maybeSingle();
+    if (!games.length) {
+      return res.json({ success: true, message: "No games found" });
+    }
 
-      if (!existing) {
-        await supabase.from('game_analysis_jobs').insert({
-          game_id: game.id,
-          student_id: student_id,
-          status: 'pending',
-          created_at: new Date().toISOString(),
-        });
+    let totalBlunders = 0;
+    let totalMistakes = 0;
+    const phaseCounts = { opening: 0, middlegame: 0, endgame: 0 };
+    const analyzedGames = [];
+
+    for (const game of games) {
+      try {
+        const result = await fetch(
+          `https://coachos-analysis-api.onrender.com/analyze-game`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_id: game.id }),
+          }
+        );
+
+        if (!result.ok) {
+          const errorText = await result.text();
+          console.error(`Game ${game.id} failed:`, errorText);
+          continue;
+        }
+
+        analyzedGames.push(game);
+      } catch (err) {
+        console.error(`Game ${game.id} failed:`, err.message);
       }
     }
 
-    // 3. Trigger analysis for each game
-    for (const game of games) {
-      console.log('Triggering analysis for game:', game.id);
+    const summaryFocus =
+      analyzedGames.length > 0
+        ? "Review recent games for recurring mistakes"
+        : "Analyze recent games";
 
-      await fetch('http://localhost:3001/analyze-game', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ game_id: game.id }),
-      });
-    }
+    const summaryReason =
+      analyzedGames.length > 0
+        ? `CoachOS analyzed ${analyzedGames.length} recent games and found patterns that need review.`
+        : "No games were successfully analyzed yet.";
+
+    await lovableFetch("/api/public/analysis/student-summary", {
+      method: "POST",
+      body: JSON.stringify({
+        student_id,
+        games_analyzed: analyzedGames.length,
+        avg_blunders_per_game:
+          analyzedGames.length > 0
+            ? Number((totalBlunders / analyzedGames.length).toFixed(2))
+            : 0,
+        weakest_phase: "middlegame",
+        common_mistake_type: "review needed",
+        suggested_focus: summaryFocus,
+        reason: summaryReason,
+        suggested_assignment:
+          "Review 2 recent games and identify the first major mistake in each.",
+      }),
+    });
 
     res.json({
       success: true,
-      message: `Triggered analysis for ${games.length} games`,
+      games_found: games.length,
+      games_analyzed: analyzedGames.length,
     });
-
   } catch (err) {
-    console.error(err);
+    console.error("Analyze student failed:", err.message);
     res.status(500).json({ error: err.message });
   }
-});app.listen(PORT, () => {
+});
+
+const PORT = process.env.PORT || 3001;
+
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
