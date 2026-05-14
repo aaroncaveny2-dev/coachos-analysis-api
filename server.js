@@ -1,3 +1,4 @@
+require("./instrument.js");
 require("dotenv").config();
 
 const express = require("express");
@@ -311,7 +312,16 @@ app.post("/analyze-student", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+const Sentry = require("@sentry/node");
 
+Sentry.setupExpressErrorHandler(app);
+
+app.use((err, req, res, next) => {
+  res.status(500).json({
+    error: "Internal server error",
+    eventId: res.sentry || null,
+  });
+});
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
