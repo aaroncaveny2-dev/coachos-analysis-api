@@ -4,7 +4,8 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { Chess } = require("chess.js");
-const Stockfish = require("stockfish");
+const path = require("path");
+const { Engine } = require("node-uci");
 
 const app = express();
 app.use(cors());
@@ -61,19 +62,43 @@ app.get("/test", (req, res) => {
   });
 });
 
-function analyzePosition(fen) {
-  return new Promise((resolve) => {
-    const engine = Stockfish();
-    let resolved = false;
+async function analyzePosition(fen) {
+  const enginePath = path.join(__dirname, "engines", "stockfish.exe");
+  const engine = new Engine(enginePath);
 
-    const finish = (score) => {
-      if (resolved) return;
-      resolved = true;
-      try {
-        engine.terminate();
-      } catch {}
-      resolve(score);
-    };
+  try {
+    await engine.init();
+    await engine.setoption("Threads", 1);
+    await engine.setoption("Hash", 32);
+    await engine.isready();
+
+    await engine.position(fen);
+    const result = await engine.go({ depth: 8 });
+
+    const scores = (result.info || [])
+      .map((item) => item.score)
+      .filter(Boolean);
+
+    const lastScore = scores[scores.length - 1];
+
+    await engine.quit();
+
+    if (!lastScore) return 0;
+
+    if (lastScore.unit === "cp") return lastScore.value;
+
+    if (lastScore.unit === "mate") {
+      return lastScore.value > 0 ? 10000 : -10000;
+    }
+
+    return 0;
+  } catch (err) {
+    try {
+      await engine.quit();
+    } catch {}
+    throw err;
+  }
+}
 
     engine.onmessage = function (line) {
       if (typeof line !== "string") return;
