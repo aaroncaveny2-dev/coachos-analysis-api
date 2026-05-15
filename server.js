@@ -63,7 +63,10 @@ app.get("/test", (req, res) => {
 });
 
 async function analyzePosition(fen) {
-  const enginePath = path.join(__dirname, "engines", "stockfish.exe");
+  const enginePath =
+  process.platform === "win32"
+    ? path.join(__dirname, "engines", "stockfish.exe")
+    : "/usr/games/stockfish";
   const engine = new Engine(enginePath);
 
   try {
