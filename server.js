@@ -121,14 +121,6 @@ app.post("/analyze-game", async (req, res) => {
 
     console.log("Analyzing game:", game_id);
 
-    await lovableFetch("/api/public/analysis/jobs", {
-      method: "POST",
-      body: JSON.stringify({
-        game_id,
-        status: "running",
-      }),
-    });
-
     const gameResponse = await lovableFetch(
       `/api/public/analysis/games?game_ids=${encodeURIComponent(game_id)}`
     );
@@ -139,7 +131,14 @@ app.post("/analyze-game", async (req, res) => {
 
     if (!game) throw new Error("Game not found from Lovable proxy");
     if (!game.pgn) throw new Error("Game has no PGN");
-
+await lovableFetch("/api/public/analysis/jobs", {
+  method: "POST",
+  body: JSON.stringify({
+    game_id,
+    student_id: game.student_id,
+    status: "running",
+  }),
+});
     const chess = new Chess();
     chess.loadPgn(game.pgn);
 
@@ -209,10 +208,11 @@ app.post("/analyze-game", async (req, res) => {
       await lovableFetch("/api/public/analysis/jobs", {
         method: "POST",
         body: JSON.stringify({
-          game_id,
-          status: "failed",
-          error_message: err.message,
-        }),
+  game_id,
+  student_id: req.body.student_id || null,
+  status: "failed",
+  error_message: err.message,
+}),
       });
     } catch (proxyErr) {
       console.error("Failed to mark job failed:", proxyErr.message);
