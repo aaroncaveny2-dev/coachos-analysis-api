@@ -115,7 +115,26 @@ function getPhase(plyIndex) {
   if (plyIndex < 60) return "middlegame";
   return "endgame";
 }
+app.get("/engine-test", async (req, res) => {
+  try {
+    const evalScore = await analyzePosition(
+      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    );
 
+    res.json({
+      ok: true,
+      eval: evalScore,
+      platform: process.platform,
+    });
+  } catch (err) {
+    console.error("Engine test failed:", err);
+
+    res.status(500).json({
+      ok: false,
+      error: err.message,
+    });
+  }
+});
 app.post("/analyze-game", async (req, res) => {
   const { game_id } = req.body;
 let game;
