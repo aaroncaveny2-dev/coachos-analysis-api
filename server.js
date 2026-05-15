@@ -4,8 +4,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { Chess } = require("chess.js");
-const path = require("path");
-const { Engine } = require("node-uci");
+const { spawn } = require("child_process");
 
 const app = express();
 app.use(cors());
@@ -18,7 +17,10 @@ app.use((req, res, next) => {
 
 const LOVABLE_API_BASE = process.env.LOVABLE_API_BASE;
 const LOVABLE_PROXY_TOKEN = process.env.LOVABLE_PROXY_TOKEN;
-
+const STOCKFISH_PATH = process.env.STOCKFISH_PATH || "stockfish";
+const STOCKFISH_DEPTH = Number(process.env.STOCKFISH_DEPTH || 6);
+const POSITION_TIMEOUT_MS = 10000;
+const GAME_TIMEOUT_MS = 5 * 60 * 1000;
 if (!LOVABLE_API_BASE || !LOVABLE_PROXY_TOKEN) {
   console.error("Missing LOVABLE_API_BASE or LOVABLE_PROXY_TOKEN");
 }
@@ -62,44 +64,125 @@ app.get("/test", (req, res) => {
   });
 });
 
-async function analyzePosition(fen) {
-  const enginePath =
-    process.platform === "win32"
-      ? path.join(__dirname, "engines", "stockfish.exe")
-      : "/usr/games/stockfish";
+function createEngine() {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(STOCKFISH_PATH);
+    let buffer = "";
+    const listeners = [];
 
-  const engine = new Engine(enginePath);
+    proc.stdout.on("data", (chunk) => {
+      buffer += chunk.toString();
 
-  try {
-    await engine.init();
-    await engine.setoption("Threads", 1);
-    await engine.setoption("Hash", 32);
-    await engine.isready();
+      let index;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        listeners.forEach((fn) => fn(line));
+      }
+    });
 
-    await engine.position(fen);
-    const result = await engine.go({ depth: 8 });
+    proc.stderr.on("data", (chunk) => {
+      console.error("Stockfish stderr:", chunk.toString());
+    });
 
-    const scores = (result.info || [])
-      .map((item) => item.score)
-      .filter(Boolean);
+    proc.on("error", reject);
 
-    const lastScore = scores[scores.length - 1];
+    const send = (cmd) => {
+      proc.stdin.write(cmd + "\n");
+    };
 
-    await engine.quit();
+    const onLine = (fn) => {
+      listeners.push(fn);
+      return () => {
+        const i = listeners.indexOf(fn);
+        if (i >= 0) listeners.splice(i, 1);
+      };
+    };
 
-    if (!lastScore) return 0;
-    if (lastScore.unit === "cp") return lastScore.value;
-    if (lastScore.unit === "mate") {
-      return lastScore.value > 0 ? 10000 : -10000;
-    }
+    const waitFor = (predicate, timeoutMs, label) =>
+      new Promise((resolveWait, rejectWait) => {
+        let off;
 
-    return 0;
-  } catch (err) {
-    try {
-      await engine.quit();
-    } catch {}
-    throw err;
+        const timer = setTimeout(() => {
+          if (off) off();
+          rejectWait(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        off = onLine((line) => {
+          const result = predicate(line);
+          if (result !== undefined) {
+            clearTimeout(timer);
+            off();
+            resolveWait(result);
+          }
+        });
+      });
+
+    resolve({
+      send,
+      async init() {
+        send("uci");
+        await waitFor((line) => (line === "uciok" ? true : undefined), 5000, "uci init");
+
+        send("isready");
+        await waitFor((line) => (line === "readyok" ? true : undefined), 5000, "engine ready");
+      },
+      async evaluateFen(fen) {
+        send("ucinewgame");
+        send(`position fen ${fen}`);
+        send(`go depth ${STOCKFISH_DEPTH}`);
+
+        let lastScore = null;
+
+        return waitFor(
+          (line) => {
+            const scoreMatch = line.match(/score (cp|mate) (-?\d+)/);
+            if (scoreMatch) {
+              const type = scoreMatch[1];
+              const value = parseInt(scoreMatch[2], 10);
+              lastScore = type === "mate" ? (value > 0 ? 10000 : -10000) : value;
+            }
+
+            const bestMoveMatch = line.match(/^bestmove (\S+)/);
+            if (bestMoveMatch) {
+              return {
+                bestmove: bestMoveMatch[1],
+                score: lastScore ?? 0,
+              };
+            }
+
+            return undefined;
+          },
+          POSITION_TIMEOUT_MS,
+          "position eval"
+        );
+      },
+      async quit() {
+        try {
+          send("quit");
+        } catch {}
+        try {
+          proc.kill();
+        } catch {}
+      },
+    });
+  });
+}
+
+function sideToMove(fen) {
+  return fen.split(" ")[1] === "b" ? "black" : "white";
+}
+
+function normalizeToWhiteScore(score, fen) {
+  return sideToMove(fen) === "black" ? -score : score;
+}
+
+function calculateCentipawnLoss(evalBeforeWhite, evalAfterWhite, moverColor) {
+  if (moverColor === "white") {
+    return Math.max(0, evalBeforeWhite - evalAfterWhite);
   }
+
+  return Math.max(0, evalAfterWhite - evalBeforeWhite);
 }
  
 
@@ -169,36 +252,58 @@ await lovableFetch("/api/public/analysis/jobs", {
     chess.reset();
 
     const moveRows = [];
+const engine = await createEngine();
+await engine.init();
 
-    for (let i = 0; i < moves.length; i++) {
-      const move = moves[i];
+console.log(`[${game_id}] engine ready, analyzing ${moves.length} ply at depth ${STOCKFISH_DEPTH}`);
 
-      const fenBefore = chess.fen();
-      const evalBefore = await analyzePosition(fenBefore);
+try {
+  const startedAt = Date.now();
 
-      chess.move(move);
-
-      const fenAfter = chess.fen();
-      const evalAfter = await analyzePosition(fenAfter);
-
-      const cpl = Math.abs(evalBefore - evalAfter);
-
-      moveRows.push({
-        game_id,
-        move_number: Math.ceil((i + 1) / 2),
-        ply: i + 1,
-        player_color: move.color === "w" ? "white" : "black",
-        san: move.san,
-        uci: move.from + move.to + (move.promotion || ""),
-        fen_before: fenBefore,
-        fen_after: fenAfter,
-        engine_eval_before: evalBefore,
-        engine_eval_after: evalAfter,
-        centipawn_loss: cpl,
-        classification: classify(cpl),
-        phase: getPhase(i),
-      });
+  for (let i = 0; i < moves.length; i++) {
+    if (Date.now() - startedAt > GAME_TIMEOUT_MS) {
+      throw new Error("Game analysis timed out after 5 minutes");
     }
+
+    const move = moves[i];
+
+    const fenBefore = chess.fen();
+    const evalBeforeRaw = await engine.evaluateFen(fenBefore);
+    const evalBefore = normalizeToWhiteScore(evalBeforeRaw.score, fenBefore);
+
+    chess.move(move);
+
+    const fenAfter = chess.fen();
+    const evalAfterRaw = await engine.evaluateFen(fenAfter);
+    const evalAfter = normalizeToWhiteScore(evalAfterRaw.score, fenAfter);
+
+    const moverColor = move.color === "w" ? "white" : "black";
+    const cpl = calculateCentipawnLoss(evalBefore, evalAfter, moverColor);
+
+    moveRows.push({
+      game_id,
+      move_number: Math.ceil((i + 1) / 2),
+      ply: i + 1,
+      player_color: moverColor,
+      san: move.san,
+      uci: move.from + move.to + (move.promotion || ""),
+      fen_before: fenBefore,
+      fen_after: fenAfter,
+      engine_eval_before: evalBefore,
+      engine_eval_after: evalAfter,
+      best_move: evalBeforeRaw.bestmove,
+      centipawn_loss: cpl,
+      classification: classify(cpl),
+      phase: getPhase(i),
+    });
+
+    if ((i + 1) % 5 === 0) {
+      console.log(`[${game_id}] progress ${i + 1}/${moves.length} ply`);
+    }
+  }
+} finally {
+  await engine.quit();
+}
 
     await lovableFetch("/api/public/analysis/move-analysis", {
       method: "POST",
