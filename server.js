@@ -64,9 +64,10 @@ app.get("/test", (req, res) => {
 
 async function analyzePosition(fen) {
   const enginePath =
-  process.platform === "win32"
-    ? path.join(__dirname, "engines", "stockfish.exe")
-    : "/usr/games/stockfish";
+    process.platform === "win32"
+      ? path.join(__dirname, "engines", "stockfish.exe")
+      : "/usr/games/stockfish";
+
   const engine = new Engine(enginePath);
 
   try {
@@ -87,9 +88,7 @@ async function analyzePosition(fen) {
     await engine.quit();
 
     if (!lastScore) return 0;
-
     if (lastScore.unit === "cp") return lastScore.value;
-
     if (lastScore.unit === "mate") {
       return lastScore.value > 0 ? 10000 : -10000;
     }
@@ -102,7 +101,6 @@ async function analyzePosition(fen) {
     throw err;
   }
 }
-
     engine.onmessage = function (line) {
       if (typeof line !== "string") return;
 
