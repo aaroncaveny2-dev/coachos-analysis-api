@@ -101,30 +101,7 @@ async function analyzePosition(fen) {
     throw err;
   }
 }
-    engine.onmessage = function (line) {
-      if (typeof line !== "string") return;
-
-      if (line.includes("score cp")) {
-        const match = line.match(/score cp (-?\d+)/);
-        if (match) finish(parseInt(match[1], 10));
-      }
-
-      if (line.includes("score mate")) {
-        const match = line.match(/score mate (-?\d+)/);
-        if (match) {
-          const mate = parseInt(match[1], 10);
-          finish(mate > 0 ? 10000 : -10000);
-        }
-      }
-    };
-
-    engine.postMessage("uci");
-    engine.postMessage(`position fen ${fen}`);
-    engine.postMessage("go depth 8");
-
-    setTimeout(() => finish(0), 8000);
-  });
-}
+ 
 
 function classify(cpl) {
   if (cpl < 30) return "good";
@@ -141,6 +118,7 @@ function getPhase(plyIndex) {
 
 app.post("/analyze-game", async (req, res) => {
   const { game_id } = req.body;
+let game;
 
   try {
     if (!game_id) throw new Error("Missing game_id");
@@ -151,7 +129,7 @@ app.post("/analyze-game", async (req, res) => {
       `/api/public/analysis/games?game_ids=${encodeURIComponent(game_id)}`
     );
 
-    const game = Array.isArray(gameResponse)
+   game = Array.isArray(gameResponse)
       ? gameResponse[0]
       : gameResponse.games?.[0];
 
@@ -235,7 +213,7 @@ await lovableFetch("/api/public/analysis/jobs", {
         method: "POST",
         body: JSON.stringify({
   game_id,
-  student_id: req.body.student_id || null,
+  student_id: game?.student_id || req.body.student_id || null,
   status: "failed",
   error_message: err.message,
 }),
