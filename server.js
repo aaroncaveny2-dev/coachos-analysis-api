@@ -347,20 +347,6 @@ await lovableFetch("/api/public/analysis/jobs", {
 });
 
 console.log(`[${game_id}] completed job status written`);
-console.log(`[${game_id}] triggering student summary refresh`);
-
-await fetch("https://coachos-analysis-v2.onrender.com/analyze-student", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    student_id: game.student_id,
-  }),
-});
-
-console.log(`[${game_id}] student summary refresh triggered`);
-
     res.json({
       success: true,
       game_id,
