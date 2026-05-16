@@ -209,7 +209,9 @@ app.get("/engine-test", async (req, res) => {
       "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     );
 
-    await engine.quit();
+    console.log(`[engine-test] quitting engine`);
+await engine.quit();
+console.log(`[engine-test] engine quit complete`);
     engine = null;
 
     res.json({
@@ -282,6 +284,7 @@ try {
     const move = moves[i];
 
     const fenBefore = chess.fen();
+console.log(`[${game_id}] starting ply ${i + 1}/${moves.length}: ${move.san}`);
     const evalBeforeRaw = await engine.evaluateFen(fenBefore);
     const evalBefore = normalizeToWhiteScore(evalBeforeRaw.score, fenBefore);
 
@@ -289,6 +292,7 @@ try {
 
     const fenAfter = chess.fen();
     const evalAfterRaw = await engine.evaluateFen(fenAfter);
+console.log(`[${game_id}] finished ply ${i + 1}/${moves.length}: ${move.san}`);
     const evalAfter = normalizeToWhiteScore(evalAfterRaw.score, fenAfter);
 
     const moverColor = move.color === "w" ? "white" : "black";
@@ -402,7 +406,7 @@ app.post("/analyze-student", async (req, res) => {
     for (const game of games) {
       try {
         const result = await fetch(
-          `https://coachos-analysis-api.onrender.com/analyze-game`,
+          `https://coachos-analysis-v2.onrender.com/analyze-game`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
