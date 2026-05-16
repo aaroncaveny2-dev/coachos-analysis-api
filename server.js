@@ -330,19 +330,19 @@ await lovableFetch("/api/public/analysis/move-analysis", {
   }),
 });
 
-console.log(`[${game_id}] move-analysis write complete`);
-
-    await lovableFetch("/api/public/analysis/jobs", {
-      method: "POST",
-      body: JSON.stringify({
-        game_id,
-        student_id: game.student_id,
 console.log(`[${game_id}] writing completed job status`);
-        status: "completed",
+
+await lovableFetch("/api/public/analysis/jobs", {
+  method: "POST",
+  body: JSON.stringify({
+    game_id,
+    student_id: game.student_id,
+    status: "completed",
+    completed_at: new Date().toISOString(),
+  }),
+});
+
 console.log(`[${game_id}] completed job status written`);
-        completed_at: new Date().toISOString(),
-      }),
-    });
 
     res.json({
       success: true,
