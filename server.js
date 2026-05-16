@@ -199,26 +199,40 @@ function getPhase(plyIndex) {
   return "endgame";
 }
 app.get("/engine-test", async (req, res) => {
+  let engine;
+
   try {
-    const evalScore = await analyzePosition(
+    engine = await createEngine();
+    await engine.init();
+
+    const result = await engine.evaluateFen(
       "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     );
 
+    await engine.quit();
+    engine = null;
+
     res.json({
       ok: true,
-      eval: evalScore,
+      score: result.score,
+      bestmove: result.bestmove,
       platform: process.platform,
+      stockfishPath: STOCKFISH_PATH,
+      depth: STOCKFISH_DEPTH,
     });
   } catch (err) {
-    console.error("Engine test failed:", err);
+    try {
+      if (engine) await engine.quit();
+    } catch {}
 
     res.status(500).json({
       ok: false,
       error: err.message,
+      platform: process.platform,
+      stockfishPath: STOCKFISH_PATH,
     });
   }
-});
-app.post("/analyze-game", async (req, res) => {
+});app.post("/analyze-game", async (req, res) => {
   const { game_id } = req.body;
 let game;
 
