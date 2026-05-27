@@ -1,4 +1,4 @@
-FROM node:20-slim
+FROM node:24-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends stockfish \
@@ -7,12 +7,14 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package*.json ./
+
 RUN npm install --omit=dev
 
 COPY . .
 
+ENV NODE_ENV=production
 ENV STOCKFISH_PATH=/usr/games/stockfish
-ENV STOCKFISH_DEPTH=14
-ENV POLL_INTERVAL_MS=3000
 
-CMD ["node", "src/index.mjs"]
+EXPOSE 3001
+
+CMD ["node", "server.js"]
