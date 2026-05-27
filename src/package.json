@@ -1,9 +1,0 @@
-{
-  "name": "canonical-analysis-worker",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "src/index.mjs",
-  "scripts": {
-    "start": "node src/index.mjs"
-  }
-}
