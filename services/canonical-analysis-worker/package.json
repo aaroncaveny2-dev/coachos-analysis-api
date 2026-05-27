@@ -1,0 +1,13 @@
+{
+  "name": "coachos-canonical-analysis-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "chess.js": "^1.0.0",
+    "pg": "^8.13.1"
+  }
+}
